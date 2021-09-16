@@ -1,7 +1,10 @@
+use std::convert::TryInto;
+
+use sqlx::{Error, Pool, Sqlite};
+
+use crate::data::db::create_pool;
 use crate::data::model::offered_post::OfferedPost;
 use crate::utils::result_utils::FatalValueMapper;
-use sqlx::{Error, Pool, Sqlite};
-use std::convert::TryInto;
 
 #[derive(Clone)]
 pub struct OfferedPostRepo {
@@ -9,11 +12,13 @@ pub struct OfferedPostRepo {
 }
 
 impl OfferedPostRepo {
-    pub fn new(pool: Pool<Sqlite>) -> Self {
+    pub async fn new() -> Self {
+        let pool = create_pool().await;
         OfferedPostRepo { pool }
     }
 
-    pub async fn migrate(pool: &Pool<Sqlite>) {
+    pub async fn migrate() {
+        let pool = &create_pool().await;
         sqlx::migrate!()
             .run(pool)
             .await

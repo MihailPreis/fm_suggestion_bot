@@ -1,27 +1,22 @@
-mod data;
-
 extern crate dotenv;
 
+use std::borrow::Borrow;
 use std::env;
 
 use dotenv::dotenv;
 use lazy_static::lazy_static;
+use rand::seq::SliceRandom;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use crate::data::db::{create_database_if_needed, migrate};
 use crate::data::model::offered_post::OfferedPost;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
-use crate::utils::result_utils::FatalValueMapper;
-use rand::seq::SliceRandom;
-use sqlx::migrate::MigrateDatabase;
-use sqlx::Sqlite;
-use sqlx::{Pool};
-use std::borrow::Borrow;
+use crate::utils::env_utils::get_env_key;
 
-
-
+mod data;
 
 mod utils;
 
@@ -32,12 +27,6 @@ static TELOXIDE_TOKEN_KEY: &str = "TELOXIDE_TOKEN";
 static ACCEPT_CALLBACK: &str = "accept";
 static DECLINE_CALLBACK: &str = "decline";
 static WITHOUT_TEXT_CALLBACK: &str = "accept-without-text";
-
-static DB_URL: &str = "sqlite://memes.db";
-
-fn get_env_key(key: &str) -> String {
-    env::var(key).map_value_or_exit(format!("Can not get value for key {}, exiting", key))
-}
 
 lazy_static! {
     static ref CHANNEL_ID: String = get_env_key(CHANNEL_ID_KEY);
@@ -59,37 +48,17 @@ lazy_static! {
     ];
 }
 
-async fn create_repo() -> OfferedPostRepo {
-    let pool = create_db_pool().await;
-    OfferedPostRepo::new(pool)
-}
-
-async fn create_db_pool() -> Pool<Sqlite> {
-    let pool = Pool::connect(DB_URL)
-        .await
-        .map_value_or_exit("Can not connect to db".to_string());
-    pool
-}
-
-async fn migrate() {
-    OfferedPostRepo::migrate(&create_db_pool().await).await;
-}
-
 #[tokio::main]
 async fn main() {
     dotenv().ok();
     teloxide::enable_logging!();
-    log::info!("Bot is running.");
-    if !sqlx::Sqlite::database_exists(DB_URL).await.unwrap() {
-        sqlx::Sqlite::create_database(DB_URL)
-            .await
-            .map_value_or_exit("Can not create db!!".to_string());
-    }
+    create_database_if_needed().await;
     migrate().await;
+    log::info!("Bot is running.");
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, |cx| async move {
-                let offered_post_repo = create_repo().await;
+                let offered_post_repo = OfferedPostRepo::new().await;
                 match message_handler(cx, offered_post_repo.borrow()).await {
                     Ok(_) => {}
                     Err(e) => log::warn!("{}", e),
@@ -98,7 +67,7 @@ async fn main() {
         })
         .callback_queries_handler(|rx: DispatcherHandlerRx<Bot, CallbackQuery>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, |cx| async move {
-                let offered_post_repo = create_repo().await;
+                let offered_post_repo = OfferedPostRepo::new().await;
                 match callback_handler(cx, &offered_post_repo).await {
                     Ok(_) => {}
                     Err(e) => log::warn!("{}", e),
@@ -152,7 +121,7 @@ async fn message_handler(
         .reply_markup(keyboard)
         .send()
         .await?;
-    offered_post_repo
+    let _ = offered_post_repo
         .save_offered_post(OfferedPost::new(
             cx.update.chat_id(),
             cx.update.id,
