@@ -66,9 +66,13 @@ async fn message_handler(cx: UpdateWithCx<Bot, Message>) -> Result<(), RequestEr
     );
     let decline_button =
         InlineKeyboardButton::callback("❌ Decline".to_string(), DECLINE_CALLBACK.to_string());
-    let keyboard = InlineKeyboardMarkup::default()
-        .append_row(vec![accept_button, accept_without_text_button])
-        .append_row(vec![decline_button]);
+    let keyboard = if cx.update.caption().unwrap_or("").len() > 0 {
+        InlineKeyboardMarkup::default()
+            .append_row(vec![accept_button, accept_without_text_button])
+            .append_row(vec![decline_button])
+    } else {
+        InlineKeyboardMarkup::default().append_row(vec![accept_button, decline_button])
+    };
     let _mes = cx.forward_to(ADMINS_CHAT_ID.to_string()).send().await?;
     let user = cx.update.from().ok_or(RequestError::RetryAfter(0))?;
     cx.requester
@@ -91,19 +95,18 @@ async fn message_handler(cx: UpdateWithCx<Bot, Message>) -> Result<(), RequestEr
 async fn callback_handler(cx: UpdateWithCx<Bot, CallbackQuery>) -> Result<(), RequestError> {
     let data = cx.update.data.clone().ok_or(RequestError::RetryAfter(0))?;
     let message = cx.update.message.ok_or(RequestError::RetryAfter(0))?;
+    let origin = message
+        .reply_to_message()
+        .ok_or(RequestError::RetryAfter(0))?;
     if data.starts_with(ACCEPT_CALLBACK) {
-        let id = message
-            .reply_to_message()
-            .ok_or(RequestError::RetryAfter(0))?
-            .id;
         let _mes = cx
             .requester
-            .copy_message(CHANNEL_ID.to_string(), message.chat_id(), id)
+            .copy_message(CHANNEL_ID.to_string(), message.chat_id(), origin.id)
             .send()
             .await?;
-        if data.starts_with(WITHOUT_TEXT_CALLBACK) {
+        if data.starts_with(WITHOUT_TEXT_CALLBACK) && origin.caption().unwrap_or("").len() > 0 {
             cx.requester
-                .edit_message_text(CHANNEL_ID.to_string(), _mes.id, "")
+                .edit_message_caption(CHANNEL_ID.to_string(), _mes.message_id)
                 .send()
                 .await?;
         }
