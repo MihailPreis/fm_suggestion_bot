@@ -12,7 +12,6 @@ Channel suggestions bot for Telegram
     ```
 2. `cargo build`
 3. `cargo run`
-4.
 
 ---
 - **License:** © 2021 M.Price.<br>See the [LICENSE file](LICENSE) for license rights and limitations (MIT).
