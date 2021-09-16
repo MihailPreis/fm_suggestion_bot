@@ -1,6 +1,10 @@
+mod utils;
+
 use teloxide::prelude::*;
+
 extern crate dotenv;
 
+use crate::utils::result_utils::FatalValueMapper;
 use dotenv::dotenv;
 use lazy_static::lazy_static;
 use std::env;
@@ -8,16 +12,27 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+static CHANNEL_ID_KEY: &str = "CHANNEL_ID";
+static ADMINS_CHAT_ID_KEY: &str = "ADMINS_CHAT_ID";
+static TELOXIDE_TOKEN_KEY: &str = "TELOXIDE_TOKEN";
+
+fn get_env_key(key: &str) -> String {
+    let value = std::env::var(key);
+
+    value.map_value_or_exit(format!("Can not get value for key {}, exiting", key))
+}
+
 lazy_static! {
-    static ref CHANNEL_ID: String = std::env::var("CHANNEL_ID").unwrap().to_string();
-    static ref ADMINS_CHAT_ID: String = std::env::var("ADMINS_CHAT_ID").unwrap().to_string();
+    static ref CHANNEL_ID: String = get_env_key(CHANNEL_ID_KEY);
+    static ref ADMINS_CHAT_ID: String = get_env_key(ADMINS_CHAT_ID_KEY);
+    static ref TELOXIDE_TOKEN: String = get_env_key(TELOXIDE_TOKEN_KEY);
 }
 
 #[tokio::main]
 async fn main() {
     teloxide::enable_logging!();
     dotenv().ok();
-    let bot = Bot::from_env();
+    let bot = Bot::new(TELOXIDE_TOKEN.to_string());
     log::info!("Bot is running.");
     Dispatcher::new(bot)
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
