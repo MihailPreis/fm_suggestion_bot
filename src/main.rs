@@ -58,6 +58,10 @@ async fn main() {
 }
 
 async fn message_handler(cx: UpdateWithCx<Bot, Message>) -> Result<(), RequestError> {
+    if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
+        log::debug!("Do not send items back to admins, chat id {}", ADMINS_CHAT_ID.to_string());
+        return Ok(())
+    }
     let accept_button =
         InlineKeyboardButton::callback("✅ Accept".to_string(), ACCEPT_CALLBACK.to_string());
     let accept_without_text_button = InlineKeyboardButton::callback(
