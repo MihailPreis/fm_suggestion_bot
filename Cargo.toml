@@ -14,10 +14,10 @@ repository = "https://github.com/MihailPreis/fm_suggestion_bot/"
 edition = "2018"
 
 [dependencies]
-teloxide = { git = "https://github.com/MihailPreis/teloxide", features = ["auto-send", "macros"] }
+teloxide = { git = "https://github.com/MihailPreis/teloxide", features = ["auto-send", "macros", "rustls", "ctrlc_handler"], default-features = false }
 log = "0.4"
 pretty_env_logger = "0.4.0"
-tokio = { version =  "1.8", features = ["rt-multi-thread", "macros"] }
+tokio = { version =  "1.11", features = ["rt-multi-thread", "macros"] }
 dotenv = "0.15.0"
 lazy_static = "1.4.0"
 tokio-stream = "0.1.7"
