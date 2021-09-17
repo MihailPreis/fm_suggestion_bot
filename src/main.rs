@@ -4,18 +4,18 @@ use std::env;
 
 use dotenv::dotenv;
 use lazy_static::lazy_static;
-use rand::seq::SliceRandom;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::utils::message_utils::ExtMessage;
-use crate::utils::user_utils::ExtUser;
 use crate::data::db::{create_database_if_needed, migrate};
 use crate::data::model::offered_post::OfferedPost;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::utils::env_utils::get_env_key;
+use crate::utils::message_utils::ExtMessage;
+use crate::utils::pic_utils::get_pic;
+use crate::utils::user_utils::ExtUser;
 
 mod data;
 mod utils;
@@ -32,20 +32,6 @@ lazy_static! {
     static ref CHANNEL_ID: String = get_env_key(CHANNEL_ID_KEY);
     static ref ADMINS_CHAT_ID: String = get_env_key(ADMINS_CHAT_ID_KEY);
     static ref TELOXIDE_TOKEN: String = get_env_key(TELOXIDE_TOKEN_KEY);
-    static ref ACCEPT_FILES: Vec<&'static [u8]> = vec![
-        include_bytes!("../responses/accept/1.mp4"),
-        include_bytes!("../responses/accept/2.mp4"),
-        include_bytes!("../responses/accept/3.mp4"),
-        include_bytes!("../responses/accept/4.mp4"),
-        include_bytes!("../responses/accept/5.mp4"),
-    ];
-    static ref DECLINE_FILES: Vec<&'static [u8]> = vec![
-        include_bytes!("../responses/decline/1.mp4"),
-        include_bytes!("../responses/decline/2.mp4"),
-        include_bytes!("../responses/decline/3.mp4"),
-        include_bytes!("../responses/decline/4.mp4"),
-        include_bytes!("../responses/decline/5.mp4"),
-    ];
 }
 
 #[tokio::main]
@@ -143,21 +129,29 @@ async fn callback_handler(
         .await;
     match offered_post {
         Ok(post) => {
-            let input_files =
-                if data.starts_with(ACCEPT_CALLBACK) || data.starts_with(WITHOUT_TEXT_CALLBACK) {
-                    &**ACCEPT_FILES
-                } else {
-                    &**DECLINE_FILES
-                };
-            let pic: Vec<u8> = input_files
-                .choose(&mut rand::thread_rng())
-                .unwrap()
-                .to_vec();
-            cx.requester
-                .send_video(ChatId::Id(post.chat_id), InputFile::memory("file.mp4", pic))
-                .reply_to_message_id(post.message_id)
-                .send()
-                .await?;
+            match get_pic(data.starts_with(ACCEPT_CALLBACK)) {
+                None => {
+                    cx.requester
+                        .send_message(
+                            ChatId::Id(post.chat_id),
+                            if data.starts_with(ACCEPT_CALLBACK) {
+                                "🎉 Post is published."
+                            } else {
+                                "🚧 Post was rejected. Send me something cooler."
+                            },
+                        )
+                        .reply_to_message_id(post.message_id)
+                        .send()
+                        .await?
+                }
+                Some(pic) => {
+                    cx.requester
+                        .send_video(ChatId::Id(post.chat_id), InputFile::memory("file.mp4", pic))
+                        .reply_to_message_id(post.message_id)
+                        .send()
+                        .await?
+                }
+            };
         }
         Err(_) => {}
     }
