@@ -11,13 +11,14 @@ use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputF
 use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use crate::utils::message_utils::ExtMessage;
+use crate::utils::user_utils::ExtUser;
 use crate::data::db::{create_database_if_needed, migrate};
 use crate::data::model::offered_post::OfferedPost;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::utils::env_utils::get_env_key;
 
 mod data;
-
 mod utils;
 
 static CHANNEL_ID_KEY: &str = "CHANNEL_ID";
@@ -83,42 +84,19 @@ async fn message_handler(
     offered_post_repo: &OfferedPostRepo,
 ) -> Result<(), RequestError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
-        log::debug!(
-            "Do not send items back to admins, chat id {}",
-            ADMINS_CHAT_ID.to_string()
-        );
         return Ok(());
     }
-    let accept_button =
-        InlineKeyboardButton::callback("✅ Accept".to_string(), ACCEPT_CALLBACK.to_string());
-    let accept_without_text_button = InlineKeyboardButton::callback(
-        "☢️ Without text".to_string(),
-        WITHOUT_TEXT_CALLBACK.to_string(),
-    );
-    let decline_button =
-        InlineKeyboardButton::callback("❌ Decline".to_string(), DECLINE_CALLBACK.to_string());
-    let keyboard = if cx.update.caption().unwrap_or("").len() > 0 {
-        InlineKeyboardMarkup::default()
-            .append_row(vec![accept_button, accept_without_text_button])
-            .append_row(vec![decline_button])
-    } else {
-        InlineKeyboardMarkup::default().append_row(vec![accept_button, decline_button])
-    };
+
     let _mes = cx.forward_to(ADMINS_CHAT_ID.to_string()).send().await?;
     let user = cx.update.from().ok_or(RequestError::RetryAfter(0))?;
     let message = cx
         .requester
         .send_message(
             ADMINS_CHAT_ID.to_string(),
-            format!(
-                "From: <@{}> {} {}\nWe going to shitpost it?",
-                user.username.as_ref().unwrap_or(&String::new()),
-                user.first_name,
-                user.last_name.as_ref().unwrap_or(&String::new()),
-            ),
+            format!("From: {}\nWe going to shitpost it?", user.ftm_title(),),
         )
         .reply_to_message_id(_mes.id)
-        .reply_markup(keyboard)
+        .reply_markup(build_keyboard(cx.update.has_caption()))
         .send()
         .await?;
     let _ = offered_post_repo
@@ -147,7 +125,7 @@ async fn callback_handler(
             .copy_message(CHANNEL_ID.to_string(), message.chat_id(), origin.id)
             .send()
             .await?;
-        if data.starts_with(WITHOUT_TEXT_CALLBACK) && origin.caption().unwrap_or("").len() > 0 {
+        if data.starts_with(WITHOUT_TEXT_CALLBACK) && origin.has_caption() {
             cx.requester
                 .edit_message_caption(CHANNEL_ID.to_string(), _mes.message_id)
                 .send()
@@ -182,4 +160,22 @@ async fn callback_handler(
         .send()
         .await?;
     Ok(())
+}
+
+fn build_keyboard(has_caption: bool) -> InlineKeyboardMarkup {
+    let accept_button =
+        InlineKeyboardButton::callback("✅ Accept".to_string(), ACCEPT_CALLBACK.to_string());
+    let decline_button =
+        InlineKeyboardButton::callback("❌ Decline".to_string(), DECLINE_CALLBACK.to_string());
+    if has_caption {
+        let accept_without_text_button = InlineKeyboardButton::callback(
+            "☢️ Without text".to_string(),
+            WITHOUT_TEXT_CALLBACK.to_string(),
+        );
+        InlineKeyboardMarkup::default()
+            .append_row(vec![accept_button, accept_without_text_button])
+            .append_row(vec![decline_button])
+    } else {
+        InlineKeyboardMarkup::default().append_row(vec![accept_button, decline_button])
+    }
 }
