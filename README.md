@@ -10,7 +10,10 @@ Channel suggestions bot for Telegram
    CHANNEL_ID=<telegram channel id>
    ADMINS_CHAT_ID=<telegram suggestion chat id>
    DATABASE_URL=sqlite:<db name>.db
+   ACCEPT_FILES=<path to folder or mp4 file | optional>
+   DECLINE_FILES=<path to folder or mp4 file | optional>
    ```
+   P.S. examples of gifs are in `responses/accept` and `responses/decline`, respectively.
 
 2. Configure database:
    ```shell
