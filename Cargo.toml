@@ -23,6 +23,8 @@ lazy_static = "1.4.0"
 tokio-stream = "0.1.7"
 sqlx = { version = "0.5", features = ["runtime-tokio-rustls", "sqlite"] }
 rand = "0.8"
+futures-util = { version = "0.3.17" }
+bytes = { version = "1.1.0" }
 
 [patch.crates-io]
 teloxide-core = { git = "https://github.com/MihailPreis/teloxide-core" } # Fix chat admins

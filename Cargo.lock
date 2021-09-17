@@ -337,7 +337,9 @@ dependencies = [
 name = "fm_suggestion_bot"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "dotenv",
+ "futures-util",
  "lazy_static",
  "log",
  "pretty_env_logger",
