@@ -1,6 +1,5 @@
 extern crate dotenv;
 
-use std::borrow::Borrow;
 use std::env;
 
 use dotenv::dotenv;
@@ -56,22 +55,29 @@ async fn main() {
     create_database_if_needed().await;
     migrate().await;
     log::info!("Bot is running.");
+    let repo = OfferedPostRepo::new().await;
+    let message_handler_repo = repo.clone();
+    let queries_handler_repo = repo.clone();
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
-            UnboundedReceiverStream::new(rx).for_each_concurrent(None, |cx| async move {
-                let offered_post_repo = OfferedPostRepo::new().await;
-                match message_handler(cx, offered_post_repo.borrow()).await {
-                    Ok(_) => {}
-                    Err(e) => log::warn!("{}", e),
+            UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
+                let offered_post_repo = message_handler_repo.clone();
+                async move {
+                    match message_handler(cx, &offered_post_repo).await {
+                        Ok(_) => {}
+                        Err(e) => log::warn!("{}", e),
+                    }
                 }
             })
         })
         .callback_queries_handler(|rx: DispatcherHandlerRx<Bot, CallbackQuery>| {
-            UnboundedReceiverStream::new(rx).for_each_concurrent(None, |cx| async move {
-                let offered_post_repo = OfferedPostRepo::new().await;
-                match callback_handler(cx, &offered_post_repo).await {
-                    Ok(_) => {}
-                    Err(e) => log::warn!("{}", e),
+            UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
+                let offered_post_repo = queries_handler_repo.clone();
+                async move {
+                    match callback_handler(cx, &offered_post_repo).await {
+                        Ok(_) => {}
+                        Err(e) => log::warn!("{}", e),
+                    }
                 }
             })
         })
