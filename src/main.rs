@@ -9,13 +9,15 @@ use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::data::db::{create_database_if_needed, migrate};
+use crate::data::model::cached_pic::CachedPic;
 use crate::data::model::offered_post::OfferedPost;
+use crate::data::repo::cached_pic_repo::CachedPicRepo;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::utils::document_utils::download_vec;
 use crate::utils::env_utils::get_env_key;
 use crate::utils::message_utils::ExtMessage;
 use crate::utils::mime_utils::{is_animate, is_image, is_video};
-use crate::utils::pic_utils::get_pic;
+use crate::utils::pic_utils::{get_pic, GetPicResult};
 use crate::utils::user_utils::ExtUser;
 
 mod data;
@@ -45,6 +47,7 @@ async fn main() {
     let repo = OfferedPostRepo::new().await;
     let message_handler_repo = repo.clone();
     let queries_handler_repo = repo.clone();
+    let cached_pic_repo = CachedPicRepo::new().await;
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
@@ -60,8 +63,9 @@ async fn main() {
         .callback_queries_handler(|rx: DispatcherHandlerRx<Bot, CallbackQuery>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
                 let offered_post_repo = queries_handler_repo.clone();
+                let cached_pic_repo = cached_pic_repo.clone();
                 async move {
-                    match callback_handler(cx, &offered_post_repo).await {
+                    match callback_handler(cx, &offered_post_repo, &cached_pic_repo).await {
                         Ok(_) => {}
                         Err(e) => log::warn!("{}", e),
                     }
@@ -106,6 +110,7 @@ async fn message_handler(
 async fn callback_handler(
     cx: UpdateWithCx<Bot, CallbackQuery>,
     offered_post_repo: &OfferedPostRepo,
+    cached_pic_repo: &CachedPicRepo,
 ) -> Result<(), RequestError> {
     let data = cx.update.data.clone().ok_or(RequestError::RetryAfter(0))?;
     let message = cx
@@ -178,7 +183,7 @@ async fn callback_handler(
         .await;
     match offered_post {
         Ok(post) => {
-            match get_pic(data.starts_with(ACCEPT_CALLBACK)) {
+            match get_pic(data.starts_with(ACCEPT_CALLBACK), cached_pic_repo).await {
                 None => {
                     cx.requester
                         .send_message(
@@ -193,13 +198,35 @@ async fn callback_handler(
                         .send()
                         .await?
                 }
-                Some(pic) => {
-                    cx.requester
-                        .send_video(ChatId::Id(post.chat_id), InputFile::memory("file.mp4", pic))
-                        .reply_to_message_id(post.message_id)
-                        .send()
-                        .await?
-                }
+                Some(pic) => match pic {
+                    GetPicResult::Raw(filename, vector) => {
+                        let response: Message = cx
+                            .requester
+                            .send_video(
+                                ChatId::Id(post.chat_id),
+                                InputFile::memory("file.mp4", vector),
+                            )
+                            .reply_to_message_id(post.message_id)
+                            .send()
+                            .await?;
+                        if let Some(video) = response.video() {
+                            cached_pic_repo
+                                .save_cached_pic(CachedPic {
+                                    image_name: filename,
+                                    image_file_id: video.file_id.to_string(),
+                                })
+                                .await?;
+                        }
+                        response
+                    }
+                    GetPicResult::FileId(file_id) => {
+                        cx.requester
+                            .send_video(ChatId::Id(post.chat_id), InputFile::file_id(file_id))
+                            .reply_to_message_id(post.message_id)
+                            .send()
+                            .await?
+                    }
+                },
             };
         }
         Err(_) => {}

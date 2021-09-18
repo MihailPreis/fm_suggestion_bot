@@ -2,7 +2,6 @@ use lazy_static::lazy_static;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::{Pool, Sqlite};
 
-use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::utils::env_utils::get_env_key;
 use crate::utils::result_utils::FatalValueMapper;
 
@@ -27,5 +26,9 @@ pub async fn create_database_if_needed() {
 }
 
 pub async fn migrate() {
-    OfferedPostRepo::migrate().await;
+    let pool = &create_pool().await;
+    sqlx::migrate!()
+        .run(pool)
+        .await
+        .map_value_or_exit("Can not migrate db!!!!".to_string());
 }
