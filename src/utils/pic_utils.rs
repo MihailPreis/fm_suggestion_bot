@@ -1,3 +1,4 @@
+use crate::data::repo::cached_pic_repo::CachedPicRepo;
 use crate::utils::env_utils::try_get_env;
 use lazy_static::lazy_static;
 use rand::seq::IteratorRandom;
@@ -13,7 +14,12 @@ lazy_static! {
     static ref DECLINE_FILES: Option<String> = try_get_env(DECLINE_FILES_KEY);
 }
 
-pub fn get_pic(is_accept: bool) -> Option<Vec<u8>> {
+pub enum GetPicResult {
+    Raw(String, Vec<u8>),
+    FileId(String),
+}
+
+pub async fn get_pic(is_accept: bool, cached_pic_repo: &CachedPicRepo) -> Option<GetPicResult> {
     let path: &Option<String> = if is_accept {
         &ACCEPT_FILES
     } else {
@@ -28,7 +34,7 @@ pub fn get_pic(is_accept: bool) -> Option<Vec<u8>> {
             .filter(|f| is_mp4_path(f.path().as_path()))
             .choose(&mut rand::thread_rng())
             .and_then(|f| f.path().to_str().and_then(|s| Some(s.to_string())))?;
-        get_file_as_vec(path.to_string())
+        _get(cached_pic_repo, &&path, is_accept).await
     } else if meta.is_file() {
         if !is_mp4(&path) {
             log::warn!(
@@ -41,7 +47,7 @@ pub fn get_pic(is_accept: bool) -> Option<Vec<u8>> {
             );
             return None;
         }
-        get_file_as_vec(path.to_string())
+        _get(cached_pic_repo, &path, is_accept).await
     } else {
         log::warn!(
             "{} env key not a file or directory.",
@@ -52,6 +58,33 @@ pub fn get_pic(is_accept: bool) -> Option<Vec<u8>> {
             }
         );
         None
+    }
+}
+
+async fn _get(
+    cached_pic_repo: &CachedPicRepo,
+    path: &&String,
+    is_accept: bool,
+) -> Option<GetPicResult> {
+    let filename = Path::new(&path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let ftm_filename = format!(
+        "{}_{}",
+        filename,
+        if is_accept { "accept" } else { "decline" }
+    );
+    if let Some(cached_pic) = cached_pic_repo
+        .get_cached_pic(ftm_filename.clone())
+        .await
+        .ok()
+    {
+        Some(GetPicResult::FileId(cached_pic.image_file_id))
+    } else {
+        get_file_as_vec(path.to_string()).and_then(|raw| Some(GetPicResult::Raw(ftm_filename, raw)))
     }
 }
 
