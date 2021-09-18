@@ -1,6 +1,5 @@
 use sqlx::{Error, Pool, Sqlite};
 
-use crate::data::db::create_pool;
 use crate::data::model::cached_pic::CachedPic;
 
 #[derive(Clone)]
@@ -9,8 +8,7 @@ pub struct CachedPicRepo {
 }
 
 impl CachedPicRepo {
-    pub async fn new() -> Self {
-        let pool = create_pool().await;
+    pub fn new(pool: Pool<Sqlite>) -> Self {
         CachedPicRepo { pool }
     }
 

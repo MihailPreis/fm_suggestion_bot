@@ -25,8 +25,7 @@ pub async fn create_database_if_needed() {
     }
 }
 
-pub async fn migrate() {
-    let pool = &create_pool().await;
+pub async fn migrate(pool: &Pool<Sqlite>) {
     sqlx::migrate!()
         .run(pool)
         .await

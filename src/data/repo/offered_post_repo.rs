@@ -2,7 +2,6 @@ use std::convert::TryInto;
 
 use sqlx::{Error, Pool, Sqlite};
 
-use crate::data::db::create_pool;
 use crate::data::model::offered_post::OfferedPost;
 
 #[derive(Clone)]
@@ -11,8 +10,7 @@ pub struct OfferedPostRepo {
 }
 
 impl OfferedPostRepo {
-    pub async fn new() -> Self {
-        let pool = create_pool().await;
+    pub fn new(pool: Pool<Sqlite>) -> Self {
         OfferedPostRepo { pool }
     }
 

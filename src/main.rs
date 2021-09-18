@@ -7,7 +7,7 @@ use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::data::db::{create_database_if_needed, migrate};
+use crate::data::db::{create_database_if_needed, create_pool, migrate};
 use crate::data::model::cached_pic::CachedPic;
 use crate::data::model::offered_post::OfferedPost;
 use crate::data::repo::cached_pic_repo::CachedPicRepo;
@@ -42,12 +42,13 @@ async fn main() {
     dotenv().ok();
     teloxide::enable_logging!();
     create_database_if_needed().await;
-    migrate().await;
+    let pool = create_pool().await;
+    migrate(&pool).await;
+    let offered_post_repo = OfferedPostRepo::new(pool.clone());
+    let message_handler_repo = offered_post_repo.clone();
+    let queries_handler_repo = offered_post_repo.clone();
+    let cached_pic_repo = CachedPicRepo::new(pool.clone());
     log::info!("Bot is running.");
-    let repo = OfferedPostRepo::new().await;
-    let message_handler_repo = repo.clone();
-    let queries_handler_repo = repo.clone();
-    let cached_pic_repo = CachedPicRepo::new().await;
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
