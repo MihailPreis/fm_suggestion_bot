@@ -5,7 +5,6 @@ use lazy_static::lazy_static;
 use std::env;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
-use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::data::db::{create_database_if_needed, migrate};
@@ -15,6 +14,7 @@ use crate::data::repo::cached_pic_repo::CachedPicRepo;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::utils::document_utils::download_vec;
 use crate::utils::env_utils::get_env_key;
+use crate::utils::error_utils::HandlerError;
 use crate::utils::message_utils::ExtMessage;
 use crate::utils::mime_utils::{is_animate, is_image, is_video};
 use crate::utils::pic_utils::{get_pic, GetPicResult};
@@ -55,7 +55,7 @@ async fn main() {
                 async move {
                     match message_handler(cx, &offered_post_repo).await {
                         Ok(_) => {}
-                        Err(e) => log::warn!("{}", e),
+                        Err(err) => log::warn!("{}", err),
                     }
                 }
             })
@@ -67,7 +67,7 @@ async fn main() {
                 async move {
                     match callback_handler(cx, &offered_post_repo, &cached_pic_repo).await {
                         Ok(_) => {}
-                        Err(e) => log::warn!("{}", e),
+                        Err(err) => log::warn!("{}", err),
                     }
                 }
             })
@@ -79,13 +79,16 @@ async fn main() {
 async fn message_handler(
     cx: UpdateWithCx<Bot, Message>,
     offered_post_repo: &OfferedPostRepo,
-) -> Result<(), RequestError> {
+) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
         return Ok(());
     }
 
     let _mes = cx.forward_to(ADMINS_CHAT_ID.to_string()).send().await?;
-    let user = cx.update.from().ok_or(RequestError::RetryAfter(0))?;
+    let user = cx
+        .update
+        .from()
+        .ok_or(HandlerError::from_str("User not found"))?;
     let message = cx
         .requester
         .send_message(
@@ -111,16 +114,20 @@ async fn callback_handler(
     cx: UpdateWithCx<Bot, CallbackQuery>,
     offered_post_repo: &OfferedPostRepo,
     cached_pic_repo: &CachedPicRepo,
-) -> Result<(), RequestError> {
-    let data = cx.update.data.clone().ok_or(RequestError::RetryAfter(0))?;
+) -> Result<(), HandlerError> {
+    let data = cx
+        .update
+        .data
+        .clone()
+        .ok_or(HandlerError::from_str("Data not found"))?;
     let message = cx
         .update
         .message
         .as_ref()
-        .ok_or(RequestError::RetryAfter(0))?;
+        .ok_or(HandlerError::from_str("Message not found"))?;
     let origin = message
         .reply_to_message()
-        .ok_or(RequestError::RetryAfter(0))?;
+        .ok_or(HandlerError::from_str("Reply message are missing"))?;
     if data.starts_with(ACCEPT_CALLBACK) {
         if let Some(doc) = origin.document() {
             if is_image(doc) {
@@ -243,7 +250,7 @@ async fn simple_copy(
     data: &String,
     message: &Message,
     origin: &Message,
-) -> Result<(), RequestError> {
+) -> Result<(), HandlerError> {
     let _mes = cx
         .requester
         .copy_message(CHANNEL_ID.to_string(), message.chat_id(), origin.id)
