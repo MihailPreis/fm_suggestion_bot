@@ -30,6 +30,7 @@ static TELOXIDE_TOKEN_KEY: &str = "TELOXIDE_TOKEN";
 
 static ACCEPT_CALLBACK: &str = "accept";
 static DECLINE_CALLBACK: &str = "decline";
+static SILENT_DECLINE_CALLBACK: &str = "decline-silent";
 static WITHOUT_TEXT_CALLBACK: &str = "accept-without-text";
 
 lazy_static! {
@@ -90,6 +91,11 @@ async fn message_handler(
         }
         return Ok(());
     }
+    if let Some(text) = cx.update.text() {
+        if text.starts_with("/") {
+            return Ok(());
+        }
+    }
 
     let _mes = cx.forward_to(ADMINS_CHAT_ID.to_string()).send().await?;
     let user = cx
@@ -103,7 +109,10 @@ async fn message_handler(
             format!("From: {}\nWe going to shitpost it?", user.ftm_title(),),
         )
         .reply_to_message_id(_mes.id)
-        .reply_markup(build_keyboard(cx.update.has_caption()))
+        .reply_markup(build_keyboard(
+            cx.update.has_caption(),
+            cx.update.text().is_some(),
+        ))
         .send()
         .await?;
     let _ = offered_post_repo
@@ -192,58 +201,60 @@ async fn callback_handler(
             simple_copy(&cx, &data, &message, origin).await?
         }
     }
-    let offered_post = offered_post_repo
-        .get_offered_post(message.chat_id(), message.id)
-        .await;
-    match offered_post {
-        Ok(post) => {
-            match get_pic(data.starts_with(ACCEPT_CALLBACK), cached_pic_repo).await {
-                None => {
-                    cx.requester
-                        .send_message(
-                            ChatId::Id(post.chat_id),
-                            if data.starts_with(ACCEPT_CALLBACK) {
-                                "🎉 Post is published."
-                            } else {
-                                "🚧 Post was rejected. Send me something cooler."
-                            },
-                        )
-                        .reply_to_message_id(post.message_id)
-                        .send()
-                        .await?
-                }
-                Some(pic) => match pic {
-                    GetPicResult::Raw(filename, vector) => {
-                        let response: Message = cx
-                            .requester
-                            .send_video(
-                                ChatId::Id(post.chat_id),
-                                InputFile::memory("file.mp4", vector),
-                            )
-                            .reply_to_message_id(post.message_id)
-                            .send()
-                            .await?;
-                        if let Some(video) = response.video() {
-                            cached_pic_repo
-                                .save_cached_pic(CachedPic {
-                                    image_name: filename,
-                                    image_file_id: video.file_id.to_string(),
-                                })
-                                .await?;
-                        }
-                        response
-                    }
-                    GetPicResult::FileId(file_id) => {
+    if !data.starts_with(SILENT_DECLINE_CALLBACK) {
+        let offered_post = offered_post_repo
+            .get_offered_post(message.chat_id(), message.id)
+            .await;
+        match offered_post {
+            Ok(post) => {
+                match get_pic(data.starts_with(ACCEPT_CALLBACK), cached_pic_repo).await {
+                    None => {
                         cx.requester
-                            .send_video(ChatId::Id(post.chat_id), InputFile::file_id(file_id))
+                            .send_message(
+                                ChatId::Id(post.chat_id),
+                                if data.starts_with(ACCEPT_CALLBACK) {
+                                    "🎉 Post is published."
+                                } else {
+                                    "🚧 Post was rejected. Send me something cooler."
+                                },
+                            )
                             .reply_to_message_id(post.message_id)
                             .send()
                             .await?
                     }
-                },
-            };
+                    Some(pic) => match pic {
+                        GetPicResult::Raw(filename, vector) => {
+                            let response: Message = cx
+                                .requester
+                                .send_video(
+                                    ChatId::Id(post.chat_id),
+                                    InputFile::memory("file.mp4", vector),
+                                )
+                                .reply_to_message_id(post.message_id)
+                                .send()
+                                .await?;
+                            if let Some(video) = response.video() {
+                                cached_pic_repo
+                                    .save_cached_pic(CachedPic {
+                                        image_name: filename,
+                                        image_file_id: video.file_id.to_string(),
+                                    })
+                                    .await?;
+                            }
+                            response
+                        }
+                        GetPicResult::FileId(file_id) => {
+                            cx.requester
+                                .send_video(ChatId::Id(post.chat_id), InputFile::file_id(file_id))
+                                .reply_to_message_id(post.message_id)
+                                .send()
+                                .await?
+                        }
+                    },
+                };
+            }
+            Err(_) => {}
         }
-        Err(_) => {}
     }
     cx.requester
         .delete_message(message.chat_id(), origin.id)
@@ -276,12 +287,20 @@ async fn simple_copy(
     Ok(())
 }
 
-fn build_keyboard(has_caption: bool) -> InlineKeyboardMarkup {
+fn build_keyboard(has_caption: bool, only_text: bool) -> InlineKeyboardMarkup {
     let accept_button =
         InlineKeyboardButton::callback("✅ Accept".to_string(), ACCEPT_CALLBACK.to_string());
     let decline_button =
         InlineKeyboardButton::callback("❌ Decline".to_string(), DECLINE_CALLBACK.to_string());
-    if has_caption {
+    let silent_decline_button = InlineKeyboardButton::callback(
+        "🗿 Silent decline".to_string(),
+        SILENT_DECLINE_CALLBACK.to_string(),
+    );
+    if only_text {
+        InlineKeyboardMarkup::default()
+            .append_row(vec![accept_button, decline_button])
+            .append_row(vec![silent_decline_button])
+    } else if has_caption {
         let accept_without_text_button = InlineKeyboardButton::callback(
             "☢️ Without text".to_string(),
             WITHOUT_TEXT_CALLBACK.to_string(),
