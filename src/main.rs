@@ -5,18 +5,21 @@ use lazy_static::lazy_static;
 use std::env;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
-use teloxide::RequestError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::data::db::{create_database_if_needed, migrate};
+use crate::data::db::{create_database_if_needed, create_pool, migrate};
+use crate::data::model::cached_pic::CachedPic;
 use crate::data::model::offered_post::OfferedPost;
+use crate::data::repo::cached_pic_repo::CachedPicRepo;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::utils::document_utils::download_vec;
 use crate::utils::env_utils::get_env_key;
+use crate::utils::error_utils::HandlerError;
 use crate::utils::message_utils::ExtMessage;
 use crate::utils::mime_utils::{is_animate, is_image, is_video};
-use crate::utils::pic_utils::get_pic;
+use crate::utils::pic_utils::{get_pic, GetPicResult};
 use crate::utils::user_utils::ExtUser;
+use crate::utils::version::VERSION_STRING;
 
 mod data;
 mod utils;
@@ -41,11 +44,13 @@ async fn main() {
     dotenv().ok();
     teloxide::enable_logging!();
     create_database_if_needed().await;
-    migrate().await;
+    let pool = create_pool().await;
+    migrate(&pool).await;
+    let offered_post_repo = OfferedPostRepo::new(pool.clone());
+    let message_handler_repo = offered_post_repo.clone();
+    let queries_handler_repo = offered_post_repo.clone();
+    let cached_pic_repo = CachedPicRepo::new(pool.clone());
     log::info!("Bot is running.");
-    let repo = OfferedPostRepo::new().await;
-    let message_handler_repo = repo.clone();
-    let queries_handler_repo = repo.clone();
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
@@ -53,7 +58,7 @@ async fn main() {
                 async move {
                     match message_handler(cx, &offered_post_repo).await {
                         Ok(_) => {}
-                        Err(e) => log::warn!("{}", e),
+                        Err(err) => log::warn!("{}", err),
                     }
                 }
             })
@@ -61,10 +66,11 @@ async fn main() {
         .callback_queries_handler(|rx: DispatcherHandlerRx<Bot, CallbackQuery>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
                 let offered_post_repo = queries_handler_repo.clone();
+                let cached_pic_repo = cached_pic_repo.clone();
                 async move {
-                    match callback_handler(cx, &offered_post_repo).await {
+                    match callback_handler(cx, &offered_post_repo, &cached_pic_repo).await {
                         Ok(_) => {}
-                        Err(e) => log::warn!("{}", e),
+                        Err(err) => log::warn!("{}", err),
                     }
                 }
             })
@@ -76,8 +82,13 @@ async fn main() {
 async fn message_handler(
     cx: UpdateWithCx<Bot, Message>,
     offered_post_repo: &OfferedPostRepo,
-) -> Result<(), RequestError> {
+) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
+        if let Some(text) = cx.update.text() {
+            if text.starts_with("/version") {
+                cx.answer(VERSION_STRING).send().await?;
+            }
+        }
         return Ok(());
     }
     if let Some(text) = cx.update.text() {
@@ -87,7 +98,10 @@ async fn message_handler(
     }
 
     let _mes = cx.forward_to(ADMINS_CHAT_ID.to_string()).send().await?;
-    let user = cx.update.from().ok_or(RequestError::RetryAfter(0))?;
+    let user = cx
+        .update
+        .from()
+        .ok_or(HandlerError::from_str("User not found"))?;
     let message = cx
         .requester
         .send_message(
@@ -115,16 +129,21 @@ async fn message_handler(
 async fn callback_handler(
     cx: UpdateWithCx<Bot, CallbackQuery>,
     offered_post_repo: &OfferedPostRepo,
-) -> Result<(), RequestError> {
-    let data = cx.update.data.clone().ok_or(RequestError::RetryAfter(0))?;
+    cached_pic_repo: &CachedPicRepo,
+) -> Result<(), HandlerError> {
+    let data = cx
+        .update
+        .data
+        .clone()
+        .ok_or(HandlerError::from_str("Data not found"))?;
     let message = cx
         .update
         .message
         .as_ref()
-        .ok_or(RequestError::RetryAfter(0))?;
+        .ok_or(HandlerError::from_str("Message not found"))?;
     let origin = message
         .reply_to_message()
-        .ok_or(RequestError::RetryAfter(0))?;
+        .ok_or(HandlerError::from_str("Reply message are missing"))?;
     if data.starts_with(ACCEPT_CALLBACK) {
         if let Some(doc) = origin.document() {
             if is_image(doc) {
@@ -188,7 +207,7 @@ async fn callback_handler(
             .await;
         match offered_post {
             Ok(post) => {
-                match get_pic(data.starts_with(ACCEPT_CALLBACK)) {
+                match get_pic(data.starts_with(ACCEPT_CALLBACK), cached_pic_repo).await {
                     None => {
                         cx.requester
                             .send_message(
@@ -203,21 +222,44 @@ async fn callback_handler(
                             .send()
                             .await?
                     }
-                    Some(pic) => {
-                        cx.requester
-                            .send_video(
-                                ChatId::Id(post.chat_id),
-                                InputFile::memory("file.mp4", pic),
-                            )
-                            .reply_to_message_id(post.message_id)
-                            .send()
-                            .await?
-                    }
+                    Some(pic) => match pic {
+                        GetPicResult::Raw(filename, vector) => {
+                            let response: Message = cx
+                                .requester
+                                .send_video(
+                                    ChatId::Id(post.chat_id),
+                                    InputFile::memory("file.mp4", vector),
+                                )
+                                .reply_to_message_id(post.message_id)
+                                .send()
+                                .await?;
+                            if let Some(video) = response.video() {
+                                cached_pic_repo
+                                    .save_cached_pic(CachedPic {
+                                        image_name: filename,
+                                        image_file_id: video.file_id.to_string(),
+                                    })
+                                    .await?;
+                            }
+                            response
+                        }
+                        GetPicResult::FileId(file_id) => {
+                            cx.requester
+                                .send_video(ChatId::Id(post.chat_id), InputFile::file_id(file_id))
+                                .reply_to_message_id(post.message_id)
+                                .send()
+                                .await?
+                        }
+                    },
                 };
             }
             Err(_) => {}
         }
     }
+    cx.requester
+        .delete_message(message.chat_id(), origin.id)
+        .send()
+        .await?;
     cx.requester
         .delete_message(message.chat_id(), message.id)
         .send()
@@ -230,7 +272,7 @@ async fn simple_copy(
     data: &String,
     message: &Message,
     origin: &Message,
-) -> Result<(), RequestError> {
+) -> Result<(), HandlerError> {
     let _mes = cx
         .requester
         .copy_message(CHANNEL_ID.to_string(), message.chat_id(), origin.id)

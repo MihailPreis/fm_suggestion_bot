@@ -12,6 +12,7 @@ keywords = ["telegram", "telegram-bot", "suggestions"]
 license = "MIT"
 repository = "https://github.com/MihailPreis/fm_suggestion_bot/"
 edition = "2018"
+build = "build.rs"
 
 [dependencies]
 teloxide = { git = "https://github.com/MihailPreis/teloxide", features = ["auto-send", "macros", "rustls", "ctrlc_handler"], default-features = false }
@@ -28,6 +29,10 @@ bytes = { version = "1.1.0" }
 
 [patch.crates-io]
 teloxide-core = { git = "https://github.com/MihailPreis/teloxide-core" } # Fix chat admins
+
+[build-dependencies]
+chrono = "0.4"
+dotenv = "0.15.0"
 
 [profile.release]
 opt-level = 3
