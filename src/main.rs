@@ -17,6 +17,7 @@ use crate::utils::message_utils::ExtMessage;
 use crate::utils::mime_utils::{is_animate, is_image, is_video};
 use crate::utils::pic_utils::get_pic;
 use crate::utils::user_utils::ExtUser;
+use crate::utils::version::VERSION_STRING;
 
 mod data;
 mod utils;
@@ -77,6 +78,11 @@ async fn message_handler(
     offered_post_repo: &OfferedPostRepo,
 ) -> Result<(), RequestError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
+        if let Some(text) = cx.update.text() {
+            if text.starts_with("/version") {
+                cx.answer(VERSION_STRING).send().await?;
+            }
+        }
         return Ok(());
     }
 
