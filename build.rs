@@ -1,17 +1,15 @@
 #![feature(bool_to_option)]
 
 use chrono::prelude::*;
-use sqlx::migrate::MigrateDatabase;
-use sqlx::{Pool, Sqlite};
+use dotenv::dotenv;
 use std::env::{
     self,
     consts::{ARCH, OS},
-    var,
 };
 use std::fs;
 use std::ops::Add;
 use std::path::Path;
-use std::process::Command;
+use std::process::{exit, Command};
 
 #[cfg(debug_assertions)]
 const BUILD_TYPE: &'static str = "debug";
@@ -19,26 +17,9 @@ const BUILD_TYPE: &'static str = "debug";
 const BUILD_TYPE: &'static str = "release";
 
 fn main() {
+    dotenv().ok();
+    create_db();
     create_version_file();
-    create_db_if_needs();
-}
-
-fn create_db_if_needs() {
-    if let Some(database_url) = var("DATABASE_URL").ok() {
-        let _ = async move {
-            if !sqlx::Sqlite::database_exists(database_url.as_str())
-                .await
-                .unwrap()
-            {
-                let _ = sqlx::Sqlite::create_database(database_url.as_str()).await;
-            }
-            if let Ok(pool) = Pool::connect(database_url.as_str()).await {
-                let pool: &Pool<Sqlite> = &pool;
-                let _ = sqlx::migrate!().run(pool).await;
-            }
-        };
-    }
-    println!("cargo:rerun-if-changed=migrations");
 }
 
 fn create_version_file() {
@@ -114,4 +95,21 @@ fn is_working_tree_clean() -> bool {
         .and_then(|status| status.code())
         .map(|code| code == 0)
         .unwrap_or(false)
+}
+
+fn create_db() {
+    Command::new("sqlx")
+        .arg("db")
+        .arg("create")
+        .status()
+        .unwrap_or_else(|_| {
+            exit(1);
+        });
+    Command::new("sqlx")
+        .arg("migrate")
+        .arg("run")
+        .status()
+        .unwrap_or_else(|_| {
+            exit(1);
+        });
 }

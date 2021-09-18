@@ -32,7 +32,7 @@ teloxide-core = { git = "https://github.com/MihailPreis/teloxide-core" } # Fix c
 
 [build-dependencies]
 chrono = "0.4"
-sqlx = { version = "0.5", features = ["runtime-tokio-rustls", "sqlite"] }
+dotenv = "0.15.0"
 
 [profile.release]
 opt-level = 3
