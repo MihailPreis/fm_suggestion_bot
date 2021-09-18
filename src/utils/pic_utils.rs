@@ -34,7 +34,7 @@ pub async fn get_pic(is_accept: bool, cached_pic_repo: &CachedPicRepo) -> Option
             .filter(|f| is_mp4_path(f.path().as_path()))
             .choose(&mut rand::thread_rng())
             .and_then(|f| f.path().to_str().and_then(|s| Some(s.to_string())))?;
-        _get(cached_pic_repo, &&path).await
+        _get(cached_pic_repo, &&path, is_accept).await
     } else if meta.is_file() {
         if !is_mp4(&path) {
             log::warn!(
@@ -47,7 +47,7 @@ pub async fn get_pic(is_accept: bool, cached_pic_repo: &CachedPicRepo) -> Option
             );
             return None;
         }
-        _get(cached_pic_repo, &path).await
+        _get(cached_pic_repo, &path, is_accept).await
     } else {
         log::warn!(
             "{} env key not a file or directory.",
@@ -61,21 +61,30 @@ pub async fn get_pic(is_accept: bool, cached_pic_repo: &CachedPicRepo) -> Option
     }
 }
 
-async fn _get(cached_pic_repo: &CachedPicRepo, path: &&String) -> Option<GetPicResult> {
+async fn _get(
+    cached_pic_repo: &CachedPicRepo,
+    path: &&String,
+    is_accept: bool,
+) -> Option<GetPicResult> {
     let filename = Path::new(&path)
         .file_stem()
         .unwrap()
         .to_str()
         .unwrap()
         .to_string();
+    let ftm_filename = format!(
+        "{}_{}",
+        filename,
+        if is_accept { "accept" } else { "decline" }
+    );
     if let Some(cached_pic) = cached_pic_repo
-        .get_cached_pic(filename.to_string())
+        .get_cached_pic(ftm_filename.clone())
         .await
         .ok()
     {
         Some(GetPicResult::FileId(cached_pic.image_file_id))
     } else {
-        get_file_as_vec(path.to_string()).and_then(|raw| Some(GetPicResult::Raw(filename, raw)))
+        get_file_as_vec(path.to_string()).and_then(|raw| Some(GetPicResult::Raw(ftm_filename, raw)))
     }
 }
 
