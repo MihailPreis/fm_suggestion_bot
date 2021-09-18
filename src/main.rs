@@ -246,6 +246,10 @@ async fn callback_handler(
         Err(_) => {}
     }
     cx.requester
+        .delete_message(message.chat_id(), origin.id)
+        .send()
+        .await?;
+    cx.requester
         .delete_message(message.chat_id(), message.id)
         .send()
         .await?;
