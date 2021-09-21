@@ -7,20 +7,22 @@ use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use crate::admin_commands::exec_command;
 use crate::data::db::{create_database_if_needed, create_pool, migrate};
 use crate::data::model::cached_pic::CachedPic;
 use crate::data::model::offered_post::OfferedPost;
 use crate::data::repo::cached_pic_repo::CachedPicRepo;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
-use crate::utils::document_utils::download_vec;
+use crate::data::repo::pic_repo::PicRepo;
+use crate::utils::document_utils::download_doc_vec;
 use crate::utils::env_utils::get_env_key;
 use crate::utils::error_utils::HandlerError;
 use crate::utils::message_utils::ExtMessage;
 use crate::utils::mime_utils::{is_animate, is_image, is_video};
 use crate::utils::pic_utils::{get_pic, GetPicResult};
 use crate::utils::user_utils::ExtUser;
-use crate::utils::version::VERSION_STRING;
 
+mod admin_commands;
 mod data;
 mod utils;
 
@@ -50,13 +52,17 @@ async fn main() {
     let message_handler_repo = offered_post_repo.clone();
     let queries_handler_repo = offered_post_repo.clone();
     let cached_pic_repo = CachedPicRepo::new(pool.clone());
+    let pic_repo = PicRepo::new(pool.clone());
+    let message_handler_pic_repo = pic_repo.clone();
+    let queries_handler_pic_repo = pic_repo.clone();
     log::info!("Bot is running.");
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
                 let offered_post_repo = message_handler_repo.clone();
+                let pic_repo = message_handler_pic_repo.clone();
                 async move {
-                    match message_handler(cx, &offered_post_repo).await {
+                    match message_handler(cx, &offered_post_repo, &pic_repo).await {
                         Ok(_) => {}
                         Err(err) => log::warn!("{}", err),
                     }
@@ -67,8 +73,11 @@ async fn main() {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
                 let offered_post_repo = queries_handler_repo.clone();
                 let cached_pic_repo = cached_pic_repo.clone();
+                let pic_repo = queries_handler_pic_repo.clone();
                 async move {
-                    match callback_handler(cx, &offered_post_repo, &cached_pic_repo).await {
+                    match callback_handler(cx, &offered_post_repo, &cached_pic_repo, &pic_repo)
+                        .await
+                    {
                         Ok(_) => {}
                         Err(err) => log::warn!("{}", err),
                     }
@@ -82,12 +91,11 @@ async fn main() {
 async fn message_handler(
     cx: UpdateWithCx<Bot, Message>,
     offered_post_repo: &OfferedPostRepo,
+    pic_repo: &PicRepo,
 ) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
-        if let Some(text) = cx.update.text() {
-            if text.starts_with("/version") {
-                cx.answer(VERSION_STRING).send().await?;
-            }
+        if let Some(text) = cx.update.text().or_else(|| cx.update.caption()) {
+            exec_command(text, &cx, pic_repo).await?;
         }
         return Ok(());
     }
@@ -130,6 +138,7 @@ async fn callback_handler(
     cx: UpdateWithCx<Bot, CallbackQuery>,
     offered_post_repo: &OfferedPostRepo,
     cached_pic_repo: &CachedPicRepo,
+    pic_repo: &PicRepo,
 ) -> Result<(), HandlerError> {
     let data = cx
         .update
@@ -144,10 +153,11 @@ async fn callback_handler(
     let origin = message
         .reply_to_message()
         .ok_or(HandlerError::from_str("Reply message are missing"))?;
-    if data.starts_with(ACCEPT_CALLBACK) {
+    let is_accept = data.starts_with(ACCEPT_CALLBACK);
+    if is_accept {
         if let Some(doc) = origin.document() {
             if is_image(doc) {
-                if let Some(image) = download_vec(doc, &cx.requester).await {
+                if let Some(image) = download_doc_vec(doc, &cx.requester).await {
                     let r = cx.requester.send_photo(
                         CHANNEL_ID.to_string(),
                         InputFile::memory("image.png", image),
@@ -163,7 +173,7 @@ async fn callback_handler(
                     simple_copy(&cx, &data, &message, origin).await?
                 }
             } else if is_animate(doc) {
-                if let Some(image) = download_vec(doc, &cx.requester).await {
+                if let Some(image) = download_doc_vec(doc, &cx.requester).await {
                     let r = cx.requester.send_animation(
                         CHANNEL_ID.to_string(),
                         InputFile::memory("image.gif", image),
@@ -179,7 +189,7 @@ async fn callback_handler(
                     simple_copy(&cx, &data, &message, origin).await?
                 }
             } else if is_video(doc) {
-                if let Some(video) = download_vec(doc, &cx.requester).await {
+                if let Some(video) = download_doc_vec(doc, &cx.requester).await {
                     let r = cx.requester.send_video(
                         CHANNEL_ID.to_string(),
                         InputFile::memory("image.mp4", video),
@@ -207,12 +217,12 @@ async fn callback_handler(
             .await;
         match offered_post {
             Ok(post) => {
-                match get_pic(data.starts_with(ACCEPT_CALLBACK), cached_pic_repo).await {
+                match get_pic(is_accept, cached_pic_repo, pic_repo).await {
                     None => {
                         cx.requester
                             .send_message(
                                 ChatId::Id(post.chat_id),
-                                if data.starts_with(ACCEPT_CALLBACK) {
+                                if is_accept {
                                     "🎉 Post is published."
                                 } else {
                                     "🚧 Post was rejected. Send me something cooler."
@@ -226,9 +236,9 @@ async fn callback_handler(
                         GetPicResult::Raw(filename, vector) => {
                             let response: Message = cx
                                 .requester
-                                .send_video(
+                                .send_animation(
                                     ChatId::Id(post.chat_id),
-                                    InputFile::memory("file.mp4", vector),
+                                    InputFile::memory(filename.to_string(), vector),
                                 )
                                 .reply_to_message_id(post.message_id)
                                 .send()
