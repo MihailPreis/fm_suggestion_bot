@@ -20,6 +20,7 @@ Channel suggestions bot for Telegram
    DATABASE_URL=sqlite:<db name>.db
    ACCEPT_FILES=<path to folder or mp4 file | optional>
    DECLINE_FILES=<path to folder or mp4 file | optional>
+   MSG_PREFIX=<prefix for /msg command. ex.: "*Admin says:* \n" | optional>
    ```
    P.S. examples of gifs (mp4 file without audio for telegram) are in `responses/accept` and `responses/decline`, respectively.
 4. `cargo build` or `cargo build --release --locked --verbose` for release build.

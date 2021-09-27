@@ -1,8 +1,10 @@
 use std::borrow::Cow;
+use std::env;
 
 use lazy_static::lazy_static;
 use regex::Regex;
 use teloxide::prelude::*;
+use teloxide::types::ParseMode::MarkdownV2;
 use teloxide::types::{ChatId, InputFile};
 
 use crate::data::model::pic::Pic;
@@ -21,11 +23,14 @@ static DELETE_CMD: &str = "/rm";
 static ADD_CMD: &str = "/add";
 static MSG_CMD: &str = "/msg";
 
+static MSG_PREFIX_KEY: &str = "MSG_PREFIX";
+
 lazy_static! {
     static ref GET_REGEX: Regex = Regex::new(r"/get (A|D) (.+)").unwrap();
     static ref ADD_REGEX: Regex = Regex::new(r"/add (A|D)").unwrap();
     static ref RM_REGEX: Regex = Regex::new(r"/rm (A|D) (.+)").unwrap();
     static ref MSG_REGEX: Regex = Regex::new(r"/msg (.+)").unwrap();
+    static ref MSG_PREFIX: String = env::var(MSG_PREFIX_KEY).unwrap_or(String::new());
 }
 
 pub async fn exec_command(
@@ -223,8 +228,12 @@ async fn send_msg(
     let msg = captures.get(1).unwrap().as_str();
 
     cx.requester
-        .send_message(ChatId::Id(post.chat_id), format!("Admin says:\n{}", msg))
+        .send_message(
+            ChatId::Id(post.chat_id),
+            format!("{}{}", MSG_PREFIX.as_str(), msg),
+        )
         .reply_to_message_id(post.message_id)
+        .parse_mode(MarkdownV2)
         .send()
         .await?;
 
