@@ -95,7 +95,7 @@ async fn message_handler(
 ) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
         if let Some(text) = cx.update.text().or_else(|| cx.update.caption()) {
-            exec_command(text, &cx, pic_repo).await?;
+            exec_command(text, &cx, pic_repo, offered_post_repo).await?;
         }
         return Ok(());
     }
@@ -129,8 +129,9 @@ async fn message_handler(
             cx.update.id,
             message.chat.id,
             message.id,
+            Some(_mes.id),
         ))
-        .await;
+        .await?;
     Ok(())
 }
 
