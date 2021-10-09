@@ -2,6 +2,7 @@ extern crate dotenv;
 
 use dotenv::dotenv;
 use lazy_static::lazy_static;
+use log::warn;
 use std::env;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
@@ -11,9 +12,11 @@ use crate::admin_commands::exec_command;
 use crate::data::db::{create_database_if_needed, create_pool, migrate};
 use crate::data::model::cached_pic::CachedPic;
 use crate::data::model::offered_post::OfferedPost;
+use crate::data::model::stats::UserStats;
 use crate::data::repo::cached_pic_repo::CachedPicRepo;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::data::repo::pic_repo::PicRepo;
+use crate::data::repo::stats_repo::StatsRepo;
 use crate::utils::document_utils::download_doc_vec;
 use crate::utils::env_utils::get_env_key;
 use crate::utils::error_utils::HandlerError;
@@ -35,6 +38,8 @@ static DECLINE_CALLBACK: &str = "decline";
 static SILENT_DECLINE_CALLBACK: &str = "decline-silent";
 static WITHOUT_TEXT_CALLBACK: &str = "accept-without-text";
 
+const STATS_COMMAND: &str = "/stats";
+
 lazy_static! {
     static ref CHANNEL_ID: String = get_env_key(CHANNEL_ID_KEY);
     static ref ADMINS_CHAT_ID: String = get_env_key(ADMINS_CHAT_ID_KEY);
@@ -55,14 +60,18 @@ async fn main() {
     let pic_repo = PicRepo::new(pool.clone());
     let message_handler_pic_repo = pic_repo.clone();
     let queries_handler_pic_repo = pic_repo.clone();
+    let stats_repo = StatsRepo::new(pool.clone());
+    let message_handler_stats_repo = stats_repo.clone();
+    let queries_handler_stats_repo = stats_repo.clone();
     log::info!("Bot is running.");
     Dispatcher::new(Bot::new(TELOXIDE_TOKEN.to_string()))
         .messages_handler(|rx: DispatcherHandlerRx<Bot, Message>| {
             UnboundedReceiverStream::new(rx).for_each_concurrent(None, move |cx| {
                 let offered_post_repo = message_handler_repo.clone();
                 let pic_repo = message_handler_pic_repo.clone();
+                let stats_repo = message_handler_stats_repo.clone();
                 async move {
-                    match message_handler(cx, &offered_post_repo, &pic_repo).await {
+                    match message_handler(cx, &offered_post_repo, &pic_repo, &stats_repo).await {
                         Ok(_) => {}
                         Err(err) => log::warn!("{}", err),
                     }
@@ -74,9 +83,16 @@ async fn main() {
                 let offered_post_repo = queries_handler_repo.clone();
                 let cached_pic_repo = cached_pic_repo.clone();
                 let pic_repo = queries_handler_pic_repo.clone();
+                let stats_repo = queries_handler_stats_repo.clone();
                 async move {
-                    match callback_handler(cx, &offered_post_repo, &cached_pic_repo, &pic_repo)
-                        .await
+                    match callback_handler(
+                        cx,
+                        &offered_post_repo,
+                        &cached_pic_repo,
+                        &pic_repo,
+                        &stats_repo,
+                    )
+                    .await
                     {
                         Ok(_) => {}
                         Err(err) => log::warn!("{}", err),
@@ -92,6 +108,7 @@ async fn message_handler(
     cx: UpdateWithCx<Bot, Message>,
     offered_post_repo: &OfferedPostRepo,
     pic_repo: &PicRepo,
+    stats_repo: &StatsRepo,
 ) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
         if let Some(text) = cx.update.text().or_else(|| cx.update.caption()) {
@@ -101,7 +118,28 @@ async fn message_handler(
     }
     if let Some(text) = cx.update.text() {
         if text.starts_with("/") {
-            return Ok(());
+            return match text {
+                STATS_COMMAND => {
+                    let UserStats {
+                        offered_count,
+                        accepted_count,
+                        declined_count,
+                        ..
+                    } = stats_repo
+                        .get_stat_for_user_or_default(cx.update.chat_id())
+                        .await;
+                    let res = cx
+                        .reply_to(format!(
+                            "Your stats are:\nOffered: {}\nAccepted: {}\nDeclined: {}",
+                            offered_count, accepted_count, declined_count
+                        ))
+                        .send()
+                        .await;
+                    res.log_on_error().await;
+                    Ok(())
+                }
+                &_ => Ok(()),
+            };
         }
     }
 
@@ -131,6 +169,19 @@ async fn message_handler(
             message.id,
         ))
         .await;
+    match stats_repo.increment_offered(cx.update.chat_id()).await {
+        Err(e) => {
+            warn!(
+                "Can not increment offered post by user {} - id {}, due to error {:?}",
+                cx.update
+                    .from()
+                    .map_or("UNKNOWN".to_string(), |x| x.ftm_title()),
+                cx.update.chat_id(),
+                e
+            )
+        }
+        _ => {}
+    };
     Ok(())
 }
 
@@ -139,6 +190,7 @@ async fn callback_handler(
     offered_post_repo: &OfferedPostRepo,
     cached_pic_repo: &CachedPicRepo,
     pic_repo: &PicRepo,
+    stats_repo: &StatsRepo,
 ) -> Result<(), HandlerError> {
     let data = cx
         .update
@@ -262,6 +314,20 @@ async fn callback_handler(
                         }
                     },
                 };
+                let save_result = if is_accept {
+                    stats_repo.increment_accepted(post.chat_id).await
+                } else {
+                    stats_repo.increment_declined(post.chat_id).await
+                };
+                match save_result {
+                    Err(e) => {
+                        warn!(
+                            "Can not update stats for user with id {} due to error {:?}",
+                            post.chat_id, e
+                        )
+                    }
+                    _ => {}
+                }
             }
             Err(_) => {}
         }
