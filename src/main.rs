@@ -112,7 +112,7 @@ async fn message_handler(
 ) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
         if let Some(text) = cx.update.text().or_else(|| cx.update.caption()) {
-            exec_command(text, &cx, pic_repo).await?;
+            exec_command(text, &cx, pic_repo, offered_post_repo).await?;
         }
         return Ok(());
     }
@@ -167,6 +167,7 @@ async fn message_handler(
             cx.update.id,
             message.chat.id,
             message.id,
+            Some(_mes.id),
         ))
         .await;
     match stats_repo.increment_offered(cx.update.chat_id()).await {
@@ -271,7 +272,8 @@ async fn callback_handler(
             Ok(post) => {
                 match get_pic(is_accept, cached_pic_repo, pic_repo).await {
                     None => {
-                        cx.requester
+                        let _ = cx
+                            .requester
                             .send_message(
                                 ChatId::Id(post.chat_id),
                                 if is_accept {
@@ -282,11 +284,11 @@ async fn callback_handler(
                             )
                             .reply_to_message_id(post.message_id)
                             .send()
-                            .await?
+                            .await;
                     }
                     Some(pic) => match pic {
                         GetPicResult::Raw(filename, vector) => {
-                            let response: Message = cx
+                            if let Ok(response) = cx
                                 .requester
                                 .send_animation(
                                     ChatId::Id(post.chat_id),
@@ -294,23 +296,25 @@ async fn callback_handler(
                                 )
                                 .reply_to_message_id(post.message_id)
                                 .send()
-                                .await?;
-                            if let Some(video) = response.video() {
-                                cached_pic_repo
-                                    .save_cached_pic(CachedPic {
-                                        image_name: filename,
-                                        image_file_id: video.file_id.to_string(),
-                                    })
-                                    .await?;
+                                .await
+                            {
+                                if let Some(video) = response.video() {
+                                    let _ = cached_pic_repo
+                                        .save_cached_pic(CachedPic {
+                                            image_name: filename,
+                                            image_file_id: video.file_id.to_string(),
+                                        })
+                                        .await;
+                                }
                             }
-                            response
                         }
                         GetPicResult::FileId(file_id) => {
-                            cx.requester
+                            let _ = cx
+                                .requester
                                 .send_video(ChatId::Id(post.chat_id), InputFile::file_id(file_id))
                                 .reply_to_message_id(post.message_id)
                                 .send()
-                                .await?
+                                .await;
                         }
                     },
                 };
@@ -332,10 +336,6 @@ async fn callback_handler(
             Err(_) => {}
         }
     }
-    cx.requester
-        .delete_message(message.chat_id(), origin.id)
-        .send()
-        .await?;
     cx.requester
         .delete_message(message.chat_id(), message.id)
         .send()
