@@ -14,6 +14,7 @@ use crate::data::model::cached_pic::CachedPic;
 use crate::data::model::offered_post::OfferedPost;
 use crate::data::model::stats::UserStats;
 use crate::data::repo::cached_pic_repo::CachedPicRepo;
+use crate::data::repo::ban_repo::BanRepo;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::data::repo::pic_repo::PicRepo;
 use crate::data::repo::stats_repo::StatsRepo;
@@ -57,6 +58,7 @@ async fn main() {
     let message_handler_repo = offered_post_repo.clone();
     let queries_handler_repo = offered_post_repo.clone();
     let cached_pic_repo = CachedPicRepo::new(pool.clone());
+    let ban_repo = BanRepo::new(pool.clone());
     let pic_repo = PicRepo::new(pool.clone());
     let message_handler_pic_repo = pic_repo.clone();
     let queries_handler_pic_repo = pic_repo.clone();
@@ -70,8 +72,9 @@ async fn main() {
                 let offered_post_repo = message_handler_repo.clone();
                 let pic_repo = message_handler_pic_repo.clone();
                 let stats_repo = message_handler_stats_repo.clone();
+                let ban_repo = ban_repo.clone();
                 async move {
-                    match message_handler(cx, &offered_post_repo, &pic_repo, &stats_repo).await {
+                    match message_handler(cx, &offered_post_repo, &pic_repo, &stats_repo, &ban_repo).await {
                         Ok(_) => {}
                         Err(err) => log::warn!("{}", err),
                     }
@@ -109,12 +112,18 @@ async fn message_handler(
     offered_post_repo: &OfferedPostRepo,
     pic_repo: &PicRepo,
     stats_repo: &StatsRepo,
+    ban_repo: &BanRepo,
 ) -> Result<(), HandlerError> {
     if cx.update.chat.id.to_string() == ADMINS_CHAT_ID.to_string() {
         if let Some(text) = cx.update.text().or_else(|| cx.update.caption()) {
-            exec_command(text, &cx, pic_repo, offered_post_repo).await?;
+            exec_command(text, &cx, pic_repo, offered_post_repo, &ban_repo).await?;
         }
         return Ok(());
+    }
+    if let Ok(is_banned) = &ban_repo.is_banned(cx.update.chat_id()).await {
+        if *is_banned {
+            return Ok(());
+        }
     }
     if let Some(text) = cx.update.text() {
         if text.starts_with("/") {
@@ -169,6 +178,9 @@ async fn message_handler(
             message.id,
             Some(_mes.id),
         ))
+        .await;
+    let _ = ban_repo
+        .create(cx.update.chat_id(), user.ftm_title(), cx.update.date.to_string())
         .await;
     match stats_repo.increment_offered(cx.update.chat_id()).await {
         Err(e) => {

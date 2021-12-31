@@ -10,6 +10,7 @@ use teloxide::types::{ChatId, InputFile};
 use crate::data::model::pic::Pic;
 use crate::data::repo::offered_post_repo::OfferedPostRepo;
 use crate::data::repo::pic_repo::PicRepo;
+use crate::data::repo::ban_repo::BanRepo;
 use crate::utils::document_utils::download_animate_vec;
 use crate::utils::error_utils::HandlerError;
 use crate::utils::option_utils::unwrap_send_error;
@@ -22,6 +23,9 @@ static GET_CMD: &str = "/get";
 static DELETE_CMD: &str = "/rm";
 static ADD_CMD: &str = "/add";
 static MSG_CMD: &str = "/msg";
+static BAN_CMD: &str = "/ban";
+static UNBAN_CMD: &str = "/unban";
+static GET_BAN_LIST_CMD: &str = "/banlist";
 
 static MSG_PREFIX_KEY: &str = "MSG_PREFIX";
 
@@ -38,9 +42,12 @@ pub async fn exec_command(
     cx: &UpdateWithCx<Bot, Message>,
     pic_repo: &PicRepo,
     offered_post_repo: &OfferedPostRepo,
+    ban_repo: &BanRepo,
 ) -> Result<(), HandlerError> {
     if text.starts_with(VERSION_CMD) {
         version(cx).await?
+    } else if text.starts_with(GET_BAN_LIST_CMD) {
+        banlist(cx, ban_repo).await?
     } else if text.starts_with(HELP_CMD) {
         help(cx).await?
     } else if text.starts_with(LIST_CMD) {
@@ -53,6 +60,10 @@ pub async fn exec_command(
         delete(cx, pic_repo, text).await?
     } else if text.starts_with(MSG_CMD) {
         send_msg(cx, offered_post_repo, text).await?
+    } else if text.starts_with(BAN_CMD) {
+        ban(cx, offered_post_repo, ban_repo).await?
+    } else if text.starts_with(UNBAN_CMD) {
+        unban(cx, offered_post_repo, ban_repo).await?
     }
     Ok(())
 }
@@ -191,7 +202,8 @@ async fn help(cx: &UpdateWithCx<Bot, Message>) -> Result<(), HandlerError> {
              - /list - get all pics from database with mark of accept/decline.\n\
              - /get {A/D} <file_name (from /list)> - get pic.\n\
              - /add {A/D} - add pic.\n\
-             - /rm {A/D} <file_name (from /list)> - remove pic.",
+             - /rm {A/D} <file_name (from /list)> - remove pic.\n\
+             - /banlist - get all bans (for change ban state - reply with /ban or /unban).",
     )
     .send()
     .await?;
@@ -237,5 +249,94 @@ async fn send_msg(
         .send()
         .await?;
 
+    Ok(())
+}
+
+async fn ban(
+    cx: &UpdateWithCx<Bot, Message>,
+    offered_post_repo: &OfferedPostRepo,
+    ban_repo: &BanRepo,
+) -> Result<(), HandlerError> {
+    let message =
+        unwrap_send_error(cx.update.reply_to_message(), cx, "Reply message not found.").await?;
+    let post = unwrap_send_error(
+        offered_post_repo
+            .get_offered_post(message.chat_id(), message.id)
+            .await
+            .ok(),
+        cx,
+        "Offered post not found.",
+    )
+    .await?;
+
+    unwrap_send_error(
+        ban_repo
+            .update(post.chat_id, message.date.to_string(), true)
+            .await
+            .ok(),
+        cx,
+        "Offered post not found.",
+    )
+    .await?;
+
+    cx.reply_to("🤕 OK").send().await?;
+
+    Ok(())
+}
+
+async fn unban(
+    cx: &UpdateWithCx<Bot, Message>,
+    offered_post_repo: &OfferedPostRepo,
+    ban_repo: &BanRepo,
+) -> Result<(), HandlerError> {
+    let message =
+        unwrap_send_error(cx.update.reply_to_message(), cx, "Reply message not found.").await?;
+    let post = unwrap_send_error(
+        offered_post_repo
+            .get_offered_post(message.chat_id(), message.id)
+            .await
+            .ok(),
+        cx,
+        "Offered post not found.",
+    )
+    .await?;
+
+    unwrap_send_error(
+        ban_repo
+            .update(post.chat_id, message.date.to_string(), false)
+            .await
+            .ok(),
+        cx,
+        "Offered post not found.",
+    )
+    .await?;
+
+    cx.reply_to("🥴 OK").send().await?;
+
+    Ok(())
+}
+
+async fn banlist(
+    cx: &UpdateWithCx<Bot, Message>,
+    ban_repo: &BanRepo,
+) -> Result<(), HandlerError> {
+    if let Ok(bans) = ban_repo.get_list().await {
+        let _list: String = bans
+            .iter()
+            .map(|item| {
+                format!("  - {} at {}", item.user_name, item.date)
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+        if _list.is_empty() {
+            cx.reply_to("Ban list is empty").send().await?;
+        } else {
+            cx.reply_to(format!("Ban list:\n{}", _list)).send().await?;
+        }
+    } else {
+        cx.reply_to("An error occurred when requesting Bans list. Smoke logs.")
+            .send()
+            .await?;
+    }
     Ok(())
 }
